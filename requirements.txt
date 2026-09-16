@@ -1,4 +1,16 @@
-opencv-python>=4.8.0
-mediapipe>=0.10.0
-scikit-learn>=1.3.0
-numpy>=1.24.0
+# Python 3.10, 3.11 ou 3.12 (o mediapipe ainda nao tem wheel para 3.13)
+
+# Visao computacional
+mediapipe>=0.10.20,<2.0
+opencv-python>=4.9        # versao COM interface grafica (cv2.imshow)
+
+# Machine learning
+scikit-learn>=1.4
+numpy>=1.26
+pandas>=2.2
+joblib>=1.3
+
+# API
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6

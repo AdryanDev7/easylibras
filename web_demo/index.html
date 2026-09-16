@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EasyLibras — Tradutor</title>
+<style>
+  :root{
+    --bg:#0e1116; --painel:#171b22; --borda:#262c36;
+    --txt:#e8ecf2; --txt2:#8b95a5; --ok:#22c08a; --alerta:#f0a020; --erro:#f05454;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column; min-height:100dvh;
+  }
+  header{padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--borda)}
+  header h1{font-size:16px; margin:0; font-weight:600; letter-spacing:.2px}
+  #status{font-size:12px; color:var(--txt2); margin-left:auto; display:flex; align-items:center; gap:6px}
+  #bolinha{width:8px; height:8px; border-radius:50%; background:var(--alerta)}
+
+  #palco{position:relative; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#000}
+  #saida{max-width:100%; max-height:100%; display:block}
+  #video{display:none}
+
+  #aviso{
+    position:absolute; inset:16px; display:none; align-items:center; justify-content:center;
+    text-align:center; padding:20px; background:rgba(14,17,22,.94); border:1px solid var(--borda);
+    border-radius:12px; font-size:14px; line-height:1.55;
+  }
+  #aviso code{background:#000; padding:2px 6px; border-radius:4px; font-size:12px; word-break:break-all}
+
+  #letra{
+    position:absolute; top:12px; left:12px; background:rgba(14,17,22,.82);
+    border:1px solid var(--borda); border-radius:12px; padding:10px 14px;
+    display:flex; align-items:center; gap:12px; backdrop-filter:blur(6px);
+  }
+  #letraTxt{font-size:34px; font-weight:700; min-width:42px; text-align:center; line-height:1}
+  #barraFundo{width:110px; height:8px; background:#2a3038; border-radius:4px; overflow:hidden}
+  #barra{height:100%; width:0; background:var(--ok); transition:width .08s linear}
+  #conf{font-size:11px; color:var(--txt2); margin-top:5px}
+  #fps{position:absolute; top:14px; right:14px; font-size:11px; color:var(--txt2)}
+
+  footer{border-top:1px solid var(--borda); background:var(--painel); padding:12px 16px 16px}
+  #texto{
+    min-height:58px; background:#0b0e13; border:1px solid var(--borda); border-radius:10px;
+    padding:12px 14px; font-size:24px; letter-spacing:3px; font-weight:600;
+    word-break:break-word; margin-bottom:12px;
+  }
+  #texto:empty::before{content:"as letras aparecem aqui"; color:#4a525e; font-size:14px; letter-spacing:0; font-weight:400}
+  .botoes{display:flex; gap:8px; flex-wrap:wrap}
+  button{
+    flex:1; min-width:96px; padding:12px 10px; font-size:14px; font-weight:500;
+    background:#232933; color:var(--txt); border:1px solid var(--borda);
+    border-radius:9px; cursor:pointer;
+  }
+  button:active{background:#2e3540}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🤟 EasyLibras</h1>
+  <div id="status"><span id="bolinha"></span><span id="statusTxt">iniciando…</span></div>
+</header>
+
+<div id="palco">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="saida"></canvas>
+  <div id="letra">
+    <div id="letraTxt">—</div>
+    <div>
+      <div id="barraFundo"><div id="barra"></div></div>
+      <div id="conf">aguardando mão</div>
+    </div>
+  </div>
+  <div id="fps"></div>
+  <div id="aviso"><div id="avisoTxt"></div></div>
+</div>
+
+<footer>
+  <div id="texto"></div>
+  <div class="botoes">
+    <button id="btnApagar">⌫ Apagar</button>
+    <button id="btnEspaco">␣ Espaço</button>
+    <button id="btnLimpar">Limpar</button>
+    <button id="btnCamera">🔄 Câmera</button>
+  </div>
+</footer>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+
+// ---- Os mesmos valores de core_ai/config.py. Mudou lá? Mude aqui. ----
+const CONF_MINIMA          = 0.65;
+const JANELA_SUAVIZACAO    = 8;
+const FRAMES_PARA_CONFIRMAR= 6;
+const SEGUNDOS_PARA_ESPACO = 1.2;
+
+const CONEXOES = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+const video   = document.getElementById("video");
+const saida   = document.getElementById("saida");
+const ctx     = saida.getContext("2d");
+const elLetra = document.getElementById("letraTxt");
+const elBarra = document.getElementById("barra");
+const elConf  = document.getElementById("conf");
+const elTexto = document.getElementById("texto");
+const elFps   = document.getElementById("fps");
+const bolinha = document.getElementById("bolinha");
+const statusTxt = document.getElementById("statusTxt");
+
+let landmarker = null, ws = null, esperandoResposta = false;
+let facing = "user", stream = null;
+let historico = [], estaveis = 0, ultimaEscrita = null;
+let ultimoVisto = performance.now(), ultimoTs = -1;
+let texto = "", fps = 0, tFps = performance.now();
+
+function status(msg, cor){ statusTxt.textContent = msg; bolinha.style.background = cor; }
+
+function mostrarAviso(html){
+  document.getElementById("avisoTxt").innerHTML = html;
+  document.getElementById("aviso").style.display = "flex";
+}
+
+// ---------- 1. Modelo de mão (servido pela própria API, mesma origem) ----------
+async function iniciarModelo(){
+  status("carregando modelo…", "var(--alerta)");
+  const fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm"
+  );
+  landmarker = await HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: "/models/hand_landmarker.task", delegate: "GPU" },
+    runningMode: "VIDEO",
+    numHands: 1,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+}
+
+// ---------- 2. Câmera ----------
+async function iniciarCamera(){
+  if (!navigator.mediaDevices?.getUserMedia){
+    mostrarAviso(
+      "<b>A câmera está bloqueada.</b><br><br>O navegador só libera a câmera em " +
+      "<code>localhost</code> ou em <code>https://</code>.<br><br>" +
+      "Abrindo pelo celular via IP da rede (<code>http://192.168.x.x</code>) não funciona. " +
+      "Veja a seção 11 do GUIA.md para as três saídas possíveis."
+    );
+    throw new Error("contexto inseguro");
+  }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  saida.width  = video.videoWidth  || 1280;
+  saida.height = video.videoHeight || 720;
+}
+
+// ---------- 3. WebSocket com a API ----------
+function conectar(){
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen    = () => status("conectado", "var(--ok)");
+  ws.onclose   = () => { status("API offline — reconectando", "var(--erro)"); setTimeout(conectar, 2000); };
+  ws.onerror   = () => status("erro na API", "var(--erro)");
+  ws.onmessage = (ev) => { esperandoResposta = false; aplicar(JSON.parse(ev.data)); };
+}
+
+// ---------- 4. Suavização: idêntica à de core_ai/realtime.py ----------
+function aplicar(resp){
+  if (resp.erro){ status("erro: " + resp.erro, "var(--erro)"); return; }
+  const letra = resp.letra, prob = resp.confianca ?? 0;
+
+  elLetra.textContent = letra ?? "—";
+  elBarra.style.width = (prob * 100) + "%";
+  elBarra.style.background = prob >= CONF_MINIMA ? "var(--ok)" : "var(--alerta)";
+  elConf.textContent = (prob * 100).toFixed(1) + "%";
+
+  historico.push(prob >= CONF_MINIMA ? letra : null);
+  if (historico.length > JANELA_SUAVIZACAO) historico.shift();
+
+  const votos = historico.filter(Boolean);
+  if (!votos.length) return;
+
+  const contagem = {};
+  for (const v of votos) contagem[v] = (contagem[v] || 0) + 1;
+  const [vencedora, n] = Object.entries(contagem).sort((a, b) => b[1] - a[1])[0];
+
+  estaveis = (n >= JANELA_SUAVIZACAO / 2 && vencedora === letra) ? estaveis + 1 : 0;
+
+  if (estaveis >= FRAMES_PARA_CONFIRMAR && vencedora !== ultimaEscrita){
+    texto += vencedora;
+    ultimaEscrita = vencedora;
+    estaveis = 0;
+    elTexto.textContent = texto;
+    if (navigator.vibrate) navigator.vibrate(30);
+  }
+}
+
+// ---------- 5. Loop principal ----------
+function loop(){
+  requestAnimationFrame(loop);
+  if (!landmarker || video.readyState < 2) return;
+
+  const agora = performance.now();
+  const ts = Math.max(Math.round(agora), ultimoTs + 1);  // timestamp precisa crescer
+  ultimoTs = ts;
+
+  // Espelha o vídeo ANTES de detectar. A coleta em Python usa cv2.flip(frame,1);
+  // se aqui não espelhar, os landmarks chegam invertidos e o modelo erra tudo.
+  ctx.save();
+  ctx.translate(saida.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, saida.width, saida.height);
+  ctx.restore();
+
+  const res = landmarker.detectForVideo(saida, ts);
+  const temMao = res.landmarks && res.landmarks.length > 0;
+
+  if (temMao){
+    const pts = res.landmarks[0];
+    const lado = res.handedness?.[0]?.[0]?.categoryName ?? "Right";
+    desenhar(pts);
+    ultimoVisto = agora;
+
+    if (ws?.readyState === WebSocket.OPEN && !esperandoResposta){
+      esperandoResposta = true;
+      ws.send(JSON.stringify({
+        landmarks: pts.map(p => [p.x, p.y, p.z ?? 0]),
+        lado: (lado === "Left" || lado === "Right") ? lado : "Right",
+        img_w: saida.width,
+        img_h: saida.height
+      }));
+    }
+  } else {
+    historico = []; estaveis = 0; ultimaEscrita = null;
+    elLetra.textContent = "—"; elBarra.style.width = "0";
+    elConf.textContent = "aguardando mão";
+    if (texto && !texto.endsWith(" ") && (agora - ultimoVisto) / 1000 > SEGUNDOS_PARA_ESPACO){
+      texto += " "; elTexto.textContent = texto;
+    }
+  }
+
+  fps = 0.9 * fps + 0.1 * (1000 / Math.max(agora - tFps, 1));
+  tFps = agora;
+  elFps.textContent = fps.toFixed(0) + " fps";
+}
+
+function desenhar(pts){
+  const w = saida.width, h = saida.height;
+  ctx.lineWidth = Math.max(2, w / 320);
+  ctx.strokeStyle = "#22c08a";
+  for (const [a, b] of CONEXOES){
+    ctx.beginPath();
+    ctx.moveTo(pts[a].x * w, pts[a].y * h);
+    ctx.lineTo(pts[b].x * w, pts[b].y * h);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#ffffff";
+  const r = Math.max(3, w / 260);
+  for (const p of pts){
+    ctx.beginPath();
+    ctx.arc(p.x * w, p.y * h, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ---------- 6. Botões ----------
+document.getElementById("btnLimpar").onclick = () => {
+  texto = ""; ultimaEscrita = null; elTexto.textContent = "";
+};
+document.getElementById("btnApagar").onclick = () => {
+  texto = texto.slice(0, -1); elTexto.textContent = texto;
+};
+document.getElementById("btnEspaco").onclick = () => {
+  texto += " "; ultimaEscrita = null; elTexto.textContent = texto;
+};
+document.getElementById("btnCamera").onclick = async () => {
+  facing = facing === "user" ? "environment" : "user";
+  try { await iniciarCamera(); } catch (e){ console.error(e); }
+};
+
+// ---------- 7. Start ----------
+(async () => {
+  try {
+    await iniciarModelo();
+    await iniciarCamera();
+    conectar();
+    loop();
+  } catch (erro){
+    console.error(erro);
+    status("falhou", "var(--erro)");
+    if (erro.name === "NotAllowedError"){
+      mostrarAviso("<b>Permissão de câmera negada.</b><br><br>Libere a câmera para este site nas configurações do navegador e recarregue a página.");
+    } else if (erro.message !== "contexto inseguro"){
+      mostrarAviso("<b>Erro ao iniciar:</b><br><br><code>" + erro.message + "</code>" +
+        "<br><br>Confira se a API está no ar e se o arquivo <code>models/hand_landmarker.task</code> existe.");
+    }
+  }
+})();
+</script>
+</body>
+</html>

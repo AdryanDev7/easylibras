@@ -1,8 +1,18 @@
-venv/
-.venv/
+# Python
 __pycache__/
-*.pyc
-*.pkl
-*.p
-.DS_Store
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Dados e modelos (pesados / gerados)
+dataset/*.csv
+dataset/*.npz
+models/*.joblib
+models/*.task
+models/*.metrics.json
+
+# IDE / SO
 .vscode/
+.idea/
+.DS_Store
