@@ -15,6 +15,47 @@ Aplicação desenvolvida para reconhecimento e tradução instantânea da Língu
 - **Machine Learning:** Scikit-Learn (Random Forest)
 - **Interface Mobile (Em breve):** React Native
 
+## 🚀 Como Rodar
+
+### 1. Preparar o ambiente
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 2. Testar câmera e ambiente
+```powershell
+python -m core_ai.check_setup
+```
+
+### 3. Gravar dados
+```powershell
+python -m core_ai.collect_data --letras A,B,C --sessao nome_1 --amostras 300
+```
+
+### 4. Pré-processar
+```powershell
+python -m core_ai.preprocess
+```
+
+### 5. Treinar
+
+**5.1 Com cruzamento de dados**
+```powershell
+python -m core_ai.train --cv
+```
+
+**5.2 Sem cruzamento de dados**
+```powershell
+python -m core_ai.train
+```
+
+### 6. Testar ao vivo
+```powershell
+python -m core_ai.realtime
+```
+
 ## 📁 Estrutura do Projeto
 
 ```text
