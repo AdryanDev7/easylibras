@@ -32,19 +32,19 @@ class MaoDetectada:
     score: float
 
 
-def garantir_modelo(destino: Path = HAND_MODEL_PATH) -> Path:
-    """Baixa hand_landmarker.task se ainda nao existir."""
+def garantir_modelo(destino: Path = HAND_MODEL_PATH, url: str = HAND_MODEL_URL) -> Path:
+    """Baixa o modelo (.task) do MediaPipe se ainda nao existir."""
     destino = Path(destino)
     if destino.exists() and destino.stat().st_size > 1000:
         return destino
     destino.parent.mkdir(parents=True, exist_ok=True)
     print(f"[hand_tracker] Baixando modelo do MediaPipe -> {destino}")
     try:
-        urllib.request.urlretrieve(HAND_MODEL_URL, destino)
+        urllib.request.urlretrieve(url, destino)
     except Exception as exc:  # pragma: no cover
         print(
             f"\n[ERRO] Nao consegui baixar o modelo automaticamente ({exc}).\n"
-            f"Baixe manualmente:\n  {HAND_MODEL_URL}\n"
+            f"Baixe manualmente:\n  {url}\n"
             f"e salve em:\n  {destino}\n",
             file=sys.stderr,
         )
@@ -104,6 +104,16 @@ class HandTracker:
 
     def __exit__(self, *_):
         self.close()
+
+
+def escolher_mao(maos: list[MaoDetectada], dominante: str = "Right") -> MaoDetectada | None:
+    """Com 2 maos na tela, devolve a dominante; se ela nao aparece, a de maior score."""
+    if not maos:
+        return None
+    for m in maos:
+        if m.lado == dominante:
+            return m
+    return max(maos, key=lambda m: m.score)
 
 
 def desenhar_mao(frame: np.ndarray, pontos: np.ndarray, cor=(0, 220, 120)) -> None:

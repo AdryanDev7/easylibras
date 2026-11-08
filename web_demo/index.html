@@ -94,6 +94,7 @@ import { FilesetResolver, HandLandmarker }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
 
 // ---- Os mesmos valores de core_ai/config.py. Mudou lá? Mude aqui. ----
+const MAO_DOMINANTE        = "Right";  // "Left" para canhotos
 const CONF_MINIMA          = 0.65;
 const JANELA_SUAVIZACAO    = 8;
 const FRAMES_PARA_CONFIRMAR= 6;
@@ -118,7 +119,7 @@ const elFps   = document.getElementById("fps");
 const bolinha = document.getElementById("bolinha");
 const statusTxt = document.getElementById("statusTxt");
 
-let landmarker = null, ws = null, esperandoResposta = false;
+let landmarker = null, ws = null, esperandoResposta = false, enviadoEm = 0;
 let facing = "user", stream = null;
 let historico = [], estaveis = 0, ultimaEscrita = null;
 let ultimoVisto = performance.now(), ultimoTs = -1;
@@ -140,7 +141,7 @@ async function iniciarModelo(){
   landmarker = await HandLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: "/models/hand_landmarker.task", delegate: "GPU" },
     runningMode: "VIDEO",
-    numHands: 1,
+    numHands: 2,
     minHandDetectionConfidence: 0.5,
     minHandPresenceConfidence: 0.5,
     minTrackingConfidence: 0.5
@@ -173,8 +174,10 @@ async function iniciarCamera(){
 function conectar(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen    = () => status("conectado", "var(--ok)");
-  ws.onclose   = () => { status("API offline — reconectando", "var(--erro)"); setTimeout(conectar, 2000); };
+  // esperandoResposta precisa ser zerado ao (re)conectar: se a conexao cair
+  // com um frame em voo, a resposta nunca chega e a demo congelava para sempre.
+  ws.onopen    = () => { esperandoResposta = false; status("conectado", "var(--ok)"); };
+  ws.onclose   = () => { esperandoResposta = false; status("API offline — reconectando", "var(--erro)"); setTimeout(conectar, 2000); };
   ws.onerror   = () => status("erro na API", "var(--erro)");
   ws.onmessage = (ev) => { esperandoResposta = false; aplicar(JSON.parse(ev.data)); };
 }
@@ -231,13 +234,19 @@ function loop(){
   const temMao = res.landmarks && res.landmarks.length > 0;
 
   if (temMao){
-    const pts = res.landmarks[0];
-    const lado = res.handedness?.[0]?.[0]?.categoryName ?? "Right";
+    // Com duas mãos, as letras vêm da dominante (igual ao config.MAO_DOMINANTE do Python)
+    let k = res.handedness.findIndex(h => h?.[0]?.categoryName === MAO_DOMINANTE);
+    if (k < 0) k = 0;
+    res.landmarks.forEach((outra, i) => { if (i !== k) desenhar(outra, "#8a8f98"); });
+    const pts = res.landmarks[k];
+    const lado = res.handedness?.[k]?.[0]?.categoryName ?? "Right";
     desenhar(pts);
     ultimoVisto = agora;
 
+    if (esperandoResposta && agora - enviadoEm > 1000) esperandoResposta = false; // resposta perdida
     if (ws?.readyState === WebSocket.OPEN && !esperandoResposta){
       esperandoResposta = true;
+      enviadoEm = agora;
       ws.send(JSON.stringify({
         landmarks: pts.map(p => [p.x, p.y, p.z ?? 0]),
         lado: (lado === "Left" || lado === "Right") ? lado : "Right",
@@ -259,10 +268,10 @@ function loop(){
   elFps.textContent = fps.toFixed(0) + " fps";
 }
 
-function desenhar(pts){
+function desenhar(pts, cor = "#22c08a"){
   const w = saida.width, h = saida.height;
   ctx.lineWidth = Math.max(2, w / 320);
-  ctx.strokeStyle = "#22c08a";
+  ctx.strokeStyle = cor;
   for (const [a, b] of CONEXOES){
     ctx.beginPath();
     ctx.moveTo(pts[a].x * w, pts[a].y * h);

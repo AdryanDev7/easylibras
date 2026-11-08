@@ -270,11 +270,24 @@ Docs interativas: http://localhost:8000/docs
 
 | Rota | Uso |
 |---|---|
-| `GET /health` | status e metadados do modelo |
+| `GET /health` | status, versão e metadados do modelo (acurácia, sessões) |
 | `GET /labels` | letras que o modelo conhece |
-| `POST /predict` | recebe os 21 pontos → retorna a letra (**recomendado**) |
-| `POST /predict/frame` | recebe imagem base64 → roda MediaPipe no servidor |
+| `POST /reload` | recarrega o modelo do disco depois de retreinar (sem reiniciar) |
+| `POST /predict?top_k=3` | recebe os 21 pontos → retorna a letra (**recomendado**) |
+| `POST /predict/frame` | recebe imagem base64 (até ~4 MB) → roda MediaPipe no servidor |
 | `WS /ws` | fluxo contínuo, mesmo payload do `/predict` |
+
+Todas as respostas de predição têm o mesmo formato:
+
+```json
+{"letra": "A", "confianca": 0.91, "top": [{"letra": "A", "confianca": 0.91}, ...], "detectou_mao": true}
+```
+
+O que a API valida antes de chegar no modelo: 21 pontos com 2 ou 3 coordenadas
+(sem `z` vira 0), nada de `NaN`/infinito, `img_w`/`img_h` maiores que zero, e
+`lado` aceita `Right`/`Left` em qualquer caixa (e `direita`/`esquerda`). No
+WebSocket, mensagem inválida recebe `{"erro": "..."}` e **a conexão continua
+aberta**: cada mensagem tem exatamente uma resposta.
 
 **Para o app mobile, prefira `/predict`.** O celular roda o MediaPipe local e
 manda ~1 KB de pontos por frame, em vez de uma imagem inteira. Fica mais rápido
@@ -287,6 +300,17 @@ curl http://localhost:8000/health
 ```
 
 ---
+
+### Testes automáticos
+
+```bash
+pip install pytest httpx
+python -m pytest -q
+```
+
+Cobre o importador de datasets, a validação dos dados, o predictor e a API
+inteira (incluindo o WebSocket recebendo lixo e continuando de pé). Rode antes
+de cada commit que mexer em `backend_api/`, `core_ai/` ou `tools/`.
 
 ## 11. Demo web (substitui o app mobile)
 
@@ -384,3 +408,213 @@ dia a acurácia despencar sem motivo aparente, é aqui que se olha primeiro.
 4. Com o modelo estável, sobe a API e abre `/demo/` no navegador.
 5. Letras dinâmicas por último — e só se sobrar prazo. É um bom "trabalho
    futuro" no relatório.
+
+---
+
+## 14. Usar um dataset pronto em vez de gravar tudo
+
+Dos três datasets que apareceram no grupo, **só um serve** para este projeto:
+
+| Dataset | O que é | Serve? |
+|---|---|---|
+| [Kaggle — librasign](https://www.kaggle.com/datasets/heitorccf/librasign) | landmarks 3D de mão, alfabeto A–Z | **sim** — é exatamente o formato que o projeto usa |
+| [LIBRAS-UFOP](https://www.repositorio.ufop.br/items/07e29918-101d-4716-8c20-f297e2115918) | 56 sinais *dinâmicos* (palavras) gravados com Kinect (RGB-D + esqueleto) | não: não é alfabeto, é sensor diferente e o repositório só oferece o artigo |
+| [Mendeley — libras_bilingual_dataset](https://data.mendeley.com/datasets/v7gyc4fvrc/1) | 68 mil pares de frases português ↔ glosa de Libras (só texto) | não: é tradução de texto, não tem imagem nem mão |
+
+O UFOP e o Mendeley valem uma linha nos "trabalhos relacionados" do relatório.
+
+### Importar o do Kaggle
+
+```bash
+pip install kagglehub
+python -m tools.importar_dataset --baixar --inspecionar   # só olha, não grava
+python -m tools.importar_dataset --baixar                  # grava dataset/externos/kaggle_librasign.csv
+```
+
+Sem `kagglehub`: baixe o zip no site, extraia e use `--origem caminho/da/pasta`.
+
+O `--inspecionar` mostra o que o script entendeu: formato das colunas, qual é a
+coluna da letra, se existe coluna de pessoa/lado, quantas amostras por letra e
+se as coordenadas estão em 0..1 ou em pixels. **Leia essa saída antes de
+treinar.** Se ele errar a coluna da letra ou da pessoa, corrija com
+`--col-rotulo` / `--col-pessoa`.
+
+Por padrão o importador remove as letras dinâmicas (H, J, K, X, Z, Ç — seção 8).
+`--max-por-letra 1000` evita que o dataset externo engula os dados de vocês.
+
+Depois disso o fluxo é o mesmo de sempre: o `preprocess` lê sozinho
+`raw_landmarks.csv` **e** tudo que estiver em `dataset/externos/`. Para tirar o
+externo do treino, apague o arquivo ou use `--sem-externos`.
+
+### Como avaliar sem se enganar
+
+A pergunta que interessa na apresentação é: *um modelo treinado com a mão dos
+outros reconhece a nossa mão, na nossa câmera?* Por isso o dataset externo
+deve ficar **sempre no treino** e o teste deve ser feito em gravações de vocês:
+
+```bash
+python -m core_ai.preprocess
+python -m core_ai.train --cv --sempre-treino "kaggle_*"
+```
+
+O treino imprime a acurácia **por sessão de teste**. Esse é o número do
+relatório. Combinação que dá um bom relatório:
+
+| Experimento | Comando | Responde |
+|---|---|---|
+| só Kaggle → testa em vocês | `--sempre-treino "kaggle_*"` com 1 sessão de vocês | o dataset pronto basta sozinho? |
+| Kaggle + vocês | `--cv --sempre-treino "kaggle_*"` com 3+ sessões | quanto ajuda juntar os dois? |
+| só vocês | `preprocess --sem-externos` e `train --cv` | linha de base |
+
+Ou seja: **ainda vale gravar pelo menos uma sessão curta** (umas 50 amostras por
+letra, cinco minutos). Sem ela não dá para medir se o modelo funciona na
+câmera de vocês, e a chance de não funcionar é real (iluminação, ângulo da
+câmera, jeito de cada um fazer a letra).
+
+Por padrão o `train` salva o modelo final retreinado com **todas** as amostras
+(o split serve só para medir). `--so-avaliar` salva o modelo do split.
+
+### Se a acurácia no teste de vocês sair muito baixa
+
+1. **Espelho / lado da mão.** Se o dataset não tem coluna de lado, o importador
+   assume `Right`. Se letras assimétricas (L, G, P, Q) saem todas erradas e as
+   simétricas (A, B, S) acertam, reimporte com `--espelhar` e compare.
+2. **Proporção x/y.** Se as coordenadas vierem em 0..1, a proporção depende da
+   resolução das imagens originais. O padrão é `--resolucao 640x480`; se o autor
+   gravou em 16:9, use `--resolucao 1280x720`.
+3. **Letras com outra configuração.** A Libras tem variação regional. Olhe a
+   seção "Maiores confusões" do treino: se uma letra específica sempre erra, o
+   dataset pode fazer a letra de outro jeito. Remova essa letra do externo ou
+   grave mais dela.
+
+---
+
+## 15. Sinais de verdade: palavras e sinais-nome
+
+O alfabeto (seções 4 a 7) reconhece **uma mão parada em um frame**. Isso não
+serve para o que a comunidade surda usa no dia a dia: ÓCULOS, SAUDADE, TCHAU e,
+principalmente, o **sinal-nome** de cada pessoa (o "batismo"), que costuma
+juntar características físicas, como óculos + cabelo cacheado + covinha.
+
+Um sinal de Libras é definido por cinco parâmetros. O módulo novo cobre quatro:
+
+| Parâmetro | Como o sistema enxerga |
+|---|---|
+| Configuração de mão | forma de cada mão (pontas dos dedos, distâncias, palma) |
+| Ponto de articulação (**onde**) | distância de cada mão até olho, nariz, boca, bochecha, queixo, testa, cabelo, orelha e peito, usando o **PoseLandmarker** (rosto + ombros) |
+| Movimento | a **sequência** de frames, comparada com DTW |
+| Orientação da palma | vetor normal da palma |
+| Expressão não manual | **ainda não**: fica como trabalho futuro (FaceLandmarker) |
+
+Tudo é medido no **referencial do corpo** (origem no meio dos ombros, unidade =
+largura dos ombros). Por isso o sinal sai igual com a pessoa perto ou longe da
+câmera, mais à esquerda ou mais à direita.
+
+### Por que DTW e não uma rede neural
+
+Sinal-nome é raro por natureza: cada pessoa tem o seu, e vocês vão ter de 3 a
+10 gravações de cada. Uma rede neural precisaria de centenas. O sistema usa
+**DTW + vizinho mais próximo** (*few-shot*):
+
+- **as gravações são o modelo.** Ensinar um sinal novo é gravar umas 5
+  repetições e rodar o treino, que leva segundos;
+- o **DTW** (*Dynamic Time Warping*) alinha duas execuções do mesmo sinal feitas
+  em velocidades diferentes;
+- é **explicável**: para cada resposta ele diz qual gravação foi a mais parecida
+  e a que distância;
+- sabe dizer **"não conheço"**: o limiar é calibrado comparando gravações de
+  pessoas diferentes. Gesto fora da lista não vira palavra.
+
+Argumento para o relatório: é o mesmo raciocínio de reconhecimento facial com
+poucas fotos por pessoa. Uma rede neural é o passo natural quando houver
+centenas de gravações por sinal.
+
+### Passo a passo
+
+**1. Testar câmera, mãos e corpo:**
+```bash
+python -m core_ai.realtime_sinais --debug
+```
+Na primeira vez ele baixa o `pose_landmarker_lite.task` (~5 MB). Sem modelo
+treinado ele avisa e sai. Rode depois do passo 3, e com `--debug` você vê os
+pontos "olho", "bochecha", "peito"... desenhados no seu rosto.
+
+**2. Gravar.** Enquadre **do quadril para cima, com o rosto inteiro na tela**:
+```bash
+python -m core_ai.coletar_sinais --sinais OCULOS,SAUDADE,TCHAU,NOME_ADRYAN --sessao adryan_1
+python -m core_ai.coletar_sinais --sinais _NADA --sessao adryan_1 --repeticoes 10
+```
+- Comece e termine cada gravação com as **mãos abaixadas** (abaixo da linha
+  cinza). A gravação para sozinha quando você abaixa as mãos.
+- `D` descarta a última gravação, se saiu errada.
+- **`_NADA`** são gestos que o sistema deve **ignorar**: coçar o rosto, ajeitar o
+  cabelo, empurrar os óculos no nariz. Sem isso, empurrar os óculos pode virar
+  "ÓCULOS". Todo sinal cujo nome começa com `_` é ignorado.
+- Grave cada sinal com **2 ou mais pessoas** (uma `--sessao` por pessoa/dia).
+
+**3. Treinar e avaliar:**
+```bash
+python -m core_ai.treinar_sinais
+```
+Ele deixa uma sessão de fora por vez e testa nela. O número que sai é "quão bem
+reconhece alguém que nunca viu". **É esse número que vai no relatório.** Também
+mostra quais sinais se confundem.
+
+**4. Usar ao vivo:**
+```bash
+python -m core_ai.realtime_sinais
+```
+Faça o sinal e abaixe as mãos: a palavra aparece. Se o corte automático
+atrapalhar, use `--manual` (ESPAÇO marca início e fim).
+
+### Sinais-nome compostos (óculos + cabelo cacheado + covinha)
+
+Gravem o sinal-nome **inteiro, do jeito que a pessoa surda faz**, como um sinal
+só (`NOME_IRMA`). O DTW compara a sequência completa, então a ordem das partes
+importa, como na Libras de verdade.
+
+**Quem precisa gravar:** o sinal-nome é dado por uma pessoa surda. O ideal é
+pedir para **ela** gravar algumas repetições (sessão `fulano_surdo_1`) e vocês
+gravarem também. Isso dá variação real e um ótimo ponto na apresentação.
+
+Gravem também as partes soltas (`OCULOS`, `COVINHA`). Nos testes com dados sintéticos, quando
+COVINHA **não** estava gravada, ela foi confundida com o sinal-nome que a
+contém. Com as duas gravadas, o sistema separa certo.
+
+### Duas mãos
+
+- **Sinais:** as duas mãos sempre entram (ÓCULOS usa as duas). A dominante vem
+  de `MAO_DOMINANTE` em `config.py`.
+- **Canhotos:** o treino adiciona uma cópia espelhada de cada gravação, então um
+  sinal gravado por destro também reconhece canhoto (testado com dados sintéticos). Para desligar,
+  use `--sem-espelho`.
+- **Alfabeto:** agora detecta as duas mãos (desenha as duas) e reconhece a letra
+  da dominante, tanto no Python quanto na demo web.
+
+### API
+
+| Rota | Uso |
+|---|---|
+| `GET /sinais/labels` | sinais que o modelo conhece |
+| `POST /sinais/predict` | recebe a sequência de frames de **um** sinal → `{"sinal": "OCULOS" ou null, "mais_parecido", "distancia", "limiar", "confianca", "top"}` |
+
+Cada frame: `{"ts_ms": 1234, "maos": {"Right": [21 x [x,y,z]], "Left": ...}, "pose": [33 x [x,y,z]]}`,
+com coordenadas 0..1 como o MediaPipe entrega (inclusive no navegador, com
+`HandLandmarker` + `PoseLandmarker` do `@mediapipe/tasks-vision`). `POST /reload`
+recarrega os dois modelos.
+
+### Limitações (escrevam no relatório, é ponto positivo)
+
+1. **Sinais em sequência, sem pausa.** O corte automático depende de abaixar as
+   mãos entre um sinal e outro. Libras fluente emenda sinais (coarticulação).
+   Separar isso é um problema de pesquisa em aberto.
+2. **Expressão facial** não é usada ainda. Em Libras ela muda o sentido
+   (pergunta × afirmação, intensidade).
+3. **Variação regional:** o mesmo conceito pode ter sinais diferentes por região.
+   O sistema reconhece o que foi gravado.
+4. **Poucos dados:** a acurácia medida com 2 ou 3 pessoas é uma estimativa
+   frágil. Digam isso com todas as letras.
+5. O **ponto de articulação** é aproximado: a pose dá olhos, nariz, boca e
+   orelhas; bochecha, queixo, testa e "cabelo" são estimados a partir deles.
+   Para covinha vs. bochecha com precisão milimétrica, o próximo passo é o
+   FaceLandmarker (478 pontos no rosto).
