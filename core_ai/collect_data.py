@@ -22,8 +22,8 @@ from pathlib import Path
 
 import cv2
 
-from .config import AMOSTRAS_PADRAO, RAW_CSV
-from .hand_tracker import HandTracker, desenhar_mao
+from .config import AMOSTRAS_PADRAO, MAO_DOMINANTE, RAW_CSV
+from .hand_tracker import HandTracker, desenhar_mao, escolher_mao
 
 CABECALHO = (
     ["label", "sessao", "lado", "img_w", "img_h"]
@@ -61,7 +61,7 @@ def coletar(letras: list[str], sessao: str, amostras: int, camera: int, saida: P
         print(f"[info] A camera nao aceitou {larg}x{alt}; usando {real_w}x{real_h}.")
 
     arq, escritor = _abrir_csv(saida)
-    tracker = HandTracker(num_maos=1, modo="video")
+    tracker = HandTracker(num_maos=2, modo="video")
     t0 = time.time()
 
     try:
@@ -78,6 +78,9 @@ def coletar(letras: list[str], sessao: str, amostras: int, camera: int, saida: P
                 h, w = frame.shape[:2]
                 ts = int((time.time() - t0) * 1000)
                 maos = tracker.processar(frame, ts)
+                # com duas maos na tela, grava so a dominante (config.MAO_DOMINANTE)
+                mao_letra = escolher_mao(maos, MAO_DOMINANTE)
+                maos = [mao_letra] if mao_letra else []
 
                 if maos:
                     desenhar_mao(frame, maos[0].pontos)

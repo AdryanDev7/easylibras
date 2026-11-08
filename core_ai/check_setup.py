@@ -54,7 +54,7 @@ def checar_camera(indice: int = 0):
     from .hand_tracker import HandTracker, desenhar_mao
 
     print("\nBaixando/carregando modelo do MediaPipe...")
-    tracker = HandTracker(num_maos=1, modo="video")
+    tracker = HandTracker(num_maos=2, modo="video")
 
     cap = cv2.VideoCapture(indice)
     if not cap.isOpened():

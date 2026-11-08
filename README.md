@@ -12,7 +12,7 @@ Aplicação desenvolvida para reconhecimento e tradução instantânea da Língu
 ## 🛠️ Tecnologias Utilizadas
 - **Linguagem:** Python 3.10+
 - **Visão Computacional:** OpenCV & MediaPipe Hands
-- **Machine Learning:** Scikit-Learn (Random Forest)
+- **Machine Learning:** Scikit-Learn (Random Forest) para o alfabeto; DTW + vizinho mais próximo para sinais dinâmicos
 - **Interface Mobile (Em breve):** React Native
 
 ## 🚀 Como Rodar
@@ -34,6 +34,14 @@ python -m core_ai.check_setup
 python -m core_ai.collect_data --letras A,B,C --sessao nome_1 --amostras 300
 ```
 
+### 3b. (Opcional) Usar o dataset pronto do Kaggle
+```powershell
+pip install kagglehub
+python -m tools.importar_dataset --baixar --inspecionar
+python -m tools.importar_dataset --baixar
+```
+Detalhes e como avaliar sem se enganar: `GUIA.md`, seção 14.
+
 ### 4. Pré-processar
 ```powershell
 python -m core_ai.preprocess
@@ -51,9 +59,33 @@ python -m core_ai.train --cv
 python -m core_ai.train
 ```
 
+**5.3 Com dataset externo, testando só nas gravações de vocês**
+```powershell
+python -m core_ai.train --cv --sempre-treino "kaggle_*"
+```
+
 ### 6. Testar ao vivo
 ```powershell
 python -m core_ai.realtime
+```
+
+### 6b. Sinais de verdade (palavras e sinais-nome)
+```powershell
+python -m core_ai.coletar_sinais --sinais OCULOS,SAUDADE,NOME_ADRYAN --sessao adryan_1
+python -m core_ai.treinar_sinais
+python -m core_ai.realtime_sinais --debug
+```
+Duas mãos + rosto/corpo + movimento. Detalhes no `GUIA.md`, seção 15.
+
+### 7. Subir a API + demo web
+```powershell
+uvicorn backend_api.app:app --reload --port 8000
+```
+Abra http://localhost:8000/demo/ (docs da API em `/docs`).
+
+### 8. Testes automáticos
+```powershell
+python -m pytest -q
 ```
 
 ## 📁 Estrutura do Projeto

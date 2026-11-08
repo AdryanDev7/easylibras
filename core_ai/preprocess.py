@@ -1,10 +1,15 @@
 """
-dataset/raw_landmarks.csv -> dataset/processed.npz
+dataset/raw_landmarks.csv (+ dataset/externos/*.csv) -> dataset/processed.npz
 
 Aplica a normalizacao geometrica e guarda tambem o grupo (sessao) de cada
 amostra, que o treino usa para fazer uma divisao honesta entre treino e teste.
 
-    python -m core_ai.preprocess
+    python -m core_ai.preprocess                 # seus dados + externos
+    python -m core_ai.preprocess --sem-externos  # so o que voces gravaram
+    python -m core_ai.preprocess --entrada a.csv b.csv
+
+Os datasets externos (ex.: Kaggle) entram por tools/importar_dataset.py, que
+grava em dataset/externos/. Apagar o arquivo de la tira ele do treino.
 """
 from __future__ import annotations
 
@@ -15,14 +20,36 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config import PROCESSED_NPZ, RAW_CSV
+from .config import DATASET_DIR, PROCESSED_NPZ, RAW_CSV
 from .features import VERSAO_FEATURES, normalizar_pontos
 
 
-def carregar(csv_path: Path) -> pd.DataFrame:
-    if not csv_path.exists():
-        raise SystemExit(f"Nao achei {csv_path}. Rode a coleta primeiro (core_ai.collect_data).")
-    df = pd.read_csv(csv_path)
+DIR_EXTERNOS = DATASET_DIR / "externos"
+
+
+def arquivos_padrao(com_externos: bool = True) -> list[Path]:
+    arquivos = [RAW_CSV] if RAW_CSV.exists() else []
+    if com_externos and DIR_EXTERNOS.exists():
+        arquivos += sorted(DIR_EXTERNOS.glob("*.csv"))
+    return arquivos
+
+
+def carregar(caminhos: list[Path] | Path) -> pd.DataFrame:
+    if isinstance(caminhos, Path):
+        caminhos = [caminhos]
+    if not caminhos:
+        raise SystemExit(
+            "Nenhum dado encontrado. Grave com `python -m core_ai.collect_data` "
+            "ou importe um dataset com `python -m tools.importar_dataset`."
+        )
+    partes = []
+    for c in caminhos:
+        if not c.exists():
+            raise SystemExit(f"Nao achei {c}.")
+        df = pd.read_csv(c)
+        print(f"  {c.name}: {len(df)} amostras")
+        partes.append(df)
+    df = pd.concat(partes, ignore_index=True)
     if df.empty:
         raise SystemExit("CSV vazio.")
     return df
@@ -66,6 +93,12 @@ def relatorio(y, grupos):
         alerta = "  <-- poucas sessoes" if sessoes < 2 else ""
         print(f"  {letra}: {n:5d} amostras em {sessoes} sessao(oes){alerta}")
 
+    por_sessao = Counter(grupos)
+    if len(por_sessao) <= 20:
+        print("\nPor sessao:")
+        for sessao, n in sorted(por_sessao.items()):
+            print(f"  {sessao}: {n}")
+
     menor, maior = min(contagem.values()), max(contagem.values())
     if maior > 2 * menor:
         print(f"\n[aviso] Classes desbalanceadas ({menor} vs {maior}). "
@@ -78,11 +111,16 @@ def relatorio(y, grupos):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--entrada", type=Path, default=RAW_CSV)
+    p.add_argument("--entrada", type=Path, nargs="+", default=None,
+                   help="CSVs de entrada (padrao: raw_landmarks.csv + dataset/externos/*.csv)")
+    p.add_argument("--sem-externos", action="store_true",
+                   help="ignora dataset/externos/ (usa so o que voces gravaram)")
     p.add_argument("--saida", type=Path, default=PROCESSED_NPZ)
     args = p.parse_args()
 
-    df = carregar(args.entrada)
+    entradas = args.entrada or arquivos_padrao(not args.sem_externos)
+    print("Lendo:")
+    df = carregar(entradas)
     X_norm, y, grupos = processar(df)
     relatorio(y, grupos)
 

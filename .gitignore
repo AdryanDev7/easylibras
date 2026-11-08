@@ -8,6 +8,7 @@ env/
 # Dados e modelos (pesados / gerados)
 dataset/*.csv
 dataset/*.npz
+dataset/externos/
 models/*.joblib
 models/*.task
 models/*.metrics.json

@@ -21,9 +21,9 @@ import joblib
 import numpy as np
 
 from .config import (CLASSIFIER_PATH, CONF_MINIMA, FRAMES_PARA_CONFIRMAR,
-                     JANELA_SUAVIZACAO, SEGUNDOS_PARA_ESPACO)
+                     JANELA_SUAVIZACAO, MAO_DOMINANTE, SEGUNDOS_PARA_ESPACO)
 from .features import VERSAO_FEATURES, montar_features
-from .hand_tracker import HandTracker, desenhar_mao
+from .hand_tracker import HandTracker, desenhar_mao, escolher_mao
 
 
 def carregar_modelo(caminho: Path):
@@ -35,7 +35,12 @@ def carregar_modelo(caminho: Path):
             "Modelo treinado com outra versao de features. Retreine "
             "(preprocess + train) antes de usar."
         )
-    return pacote["modelo"], pacote["rotulos"]
+    modelo = pacote["modelo"]
+    # n_jobs=-1 e otimo no treino, mas para prever 1 frame abre um pool de
+    # threads a cada chamada (medido ~4x mais lento). Em tempo real, use 1.
+    if hasattr(modelo, "n_jobs"):
+        modelo.n_jobs = 1
+    return modelo, pacote["rotulos"]
 
 
 def _texto(frame, txt, pos, cor=(255, 255, 255), escala=0.7, grossura=1):
@@ -53,7 +58,7 @@ def rodar(caminho_modelo: Path, camera: int, conf_min: float, resolucao: str = "
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, larg)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, alt)
 
-    tracker = HandTracker(num_maos=1, modo="video")
+    tracker = HandTracker(num_maos=2, modo="video")
     historico = deque(maxlen=JANELA_SUAVIZACAO)
     texto = ""
     ultima_escrita = None
@@ -74,7 +79,10 @@ def rodar(caminho_modelo: Path, camera: int, conf_min: float, resolucao: str = "
             letra, prob = None, 0.0
 
             if maos:
-                mao = maos[0]
+                mao = escolher_mao(maos, MAO_DOMINANTE)
+                for outra in maos:
+                    if outra is not mao:
+                        desenhar_mao(frame, outra.pontos, (150, 150, 150))
                 desenhar_mao(frame, mao.pontos)
                 feats = montar_features(mao.pontos, mao.lado).reshape(1, -1)
                 probs = modelo.predict_proba(feats)[0]
